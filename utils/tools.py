@@ -163,6 +163,7 @@ def synth_one_sample(targets, predictions, vocoder, model_config, preprocess_con
 
 def synth_samples(targets, predictions, vocoder, model_config, preprocess_config, path):
 
+    os.makedirs(path, exist_ok=True)
     basenames = targets[0]
     for i in range(len(predictions[0])):
         basename = basenames[i]
