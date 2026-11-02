@@ -78,6 +78,8 @@ def parse_log(path):
 
 def loss_plot(log_path, out_path, title):
     names = ["Total", "Mel", "Mel PostNet", "Pitch", "Energy", "Duration"]
+    if not os.path.exists(log_path):
+        return
     steps, rows = parse_log(log_path)
     if len(steps) == 0:
         return

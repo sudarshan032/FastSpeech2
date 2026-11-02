@@ -29,6 +29,14 @@ def read_lexicon(lex_path):
     return lexicon
 
 
+LETTER_NAMES = dict(zip(
+    "abcdefghijklmnopqrstuvwxyz",
+    ["EY1", "B IY1", "S IY1", "D IY1", "IY1", "EH1 F", "JH IY1", "EY1 CH", "AY1", "JH EY1", "K EY1", "EH1 L", "EH1 M",
+     "EH1 N", "OW1", "P IY1", "K Y UW1", "AA1 R", "EH1 S", "T IY1", "Y UW1", "V IY1", "D AH1 B AH0 L Y UW0",
+     "EH1 K S", "W AY1", "Z IY1"],
+))
+
+
 def preprocess_english(text, preprocess_config):
     if preprocess_config["dataset"] == "Svarah":
         from text.cleaners import svarah_cleaners
@@ -39,16 +47,26 @@ def preprocess_english(text, preprocess_config):
 
     g2p = G2p()
     phones = []
+    text = re.sub(r"(?<=[a-z])-(?=[a-z])", " ", text)  # "forty-five": no pause inside a number
     words = re.split(r"([,;.\-\?\!\s+])", text)
+    # runs of single letters come from spelled-out acronyms ("a m", "s b i"): use letter names
+    single = [bool(re.fullmatch(r"[a-z]", w)) for w in words]
+    near = [i for i, w in enumerate(words) if w.strip()]
+    spelled = set()
+    for a, b in zip(near, near[1:]):
+        if single[a] and single[b]:
+            spelled |= {a, b}
     # homographs (e.g. "conduct" noun vs verb): pick the pronunciation by part of speech,
     # as g2p_en does, instead of the single lexicon entry
     from nltk import pos_tag
 
     tokens = [w for w in words if re.fullmatch(r"[A-Za-z']+", w)]
     pos = iter(pos_tag(tokens))
-    for w in words:
+    for i, w in enumerate(words):
         tag = next(pos)[1] if re.fullmatch(r"[A-Za-z']+", w) else None
-        if tag and w.lower() in g2p.homograph2features:
+        if i in spelled:
+            phones += LETTER_NAMES[w].split()
+        elif tag and w.lower() in g2p.homograph2features:
             pron1, pron2, pos1 = g2p.homograph2features[w.lower()]
             phones += pron1 if tag.startswith(pos1) else pron2
         elif w.lower() in lexicon:
