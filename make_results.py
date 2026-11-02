@@ -96,9 +96,9 @@ def loss_plot(log_path, out_path, title):
     plt.close(fig)
 
 
-def main(a):
+def main(a, configs=None):
     name = DATASET[a.lang]
-    configs = load_configs(name)
+    configs = configs or load_configs(name)
     pp, mc, tc = configs
     hop, sr = pp["preprocessing"]["stft"]["hop_length"], pp["preprocessing"]["audio"]["sampling_rate"]
     stats = json.load(open(os.path.join(pp["path"]["preprocessed_path"], "stats.json")))
