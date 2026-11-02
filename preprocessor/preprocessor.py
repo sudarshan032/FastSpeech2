@@ -1,10 +1,12 @@
 import os
 import random
 import json
+from multiprocessing import Pool, cpu_count
 
 import tgt
 import librosa
 import numpy as np
+import torch
 import pyworld as pw
 from scipy.interpolate import interp1d
 from sklearn.preprocessing import StandardScaler
@@ -62,32 +64,36 @@ class Preprocessor:
         pitch_scaler = StandardScaler()
         energy_scaler = StandardScaler()
 
-        # Compute pitch, energy, duration, and mel-spectrogram
-        speakers = {}
-        for i, speaker in enumerate(tqdm(os.listdir(self.in_dir))):
-            speakers[speaker] = i
-            for wav_name in os.listdir(os.path.join(self.in_dir, speaker)):
-                if ".wav" not in wav_name:
+        # Compute pitch, energy, duration, and mel-spectrogram (one process per CPU core)
+        speaker_names = sorted(
+            d for d in os.listdir(self.in_dir) if os.path.isdir(os.path.join(self.in_dir, d))
+        )
+        speakers = {s: i for i, s in enumerate(speaker_names)}
+        jobs = []
+        for speaker in speaker_names:
+            for wav_name in sorted(os.listdir(os.path.join(self.in_dir, speaker))):
+                if not wav_name.endswith(".wav"):
                     continue
-
-                basename = wav_name.split(".")[0]
+                basename = wav_name[:-4]
                 tg_path = os.path.join(
                     self.out_dir, "TextGrid", speaker, "{}.TextGrid".format(basename)
                 )
                 if os.path.exists(tg_path):
-                    ret = self.process_utterance(speaker, basename)
-                    if ret is None:
-                        continue
-                    else:
-                        info, pitch, energy, n = ret
-                    out.append(info)
-
-                if len(pitch) > 0:
-                    pitch_scaler.partial_fit(pitch.reshape((-1, 1)))
-                if len(energy) > 0:
-                    energy_scaler.partial_fit(energy.reshape((-1, 1)))
-
-                n_frames += n
+                    jobs.append((speaker, basename))
+        with Pool(cpu_count(), initializer=torch.set_num_threads, initargs=(1,)) as pool:
+            results = list(
+                tqdm(pool.imap(self._process_job, jobs, chunksize=8), total=len(jobs))
+            )
+        for ret in results:
+            if ret is None:
+                continue
+            info, pitch, energy, n = ret
+            out.append(info)
+            if len(pitch) > 0:
+                pitch_scaler.partial_fit(pitch.reshape((-1, 1)))
+            if len(energy) > 0:
+                energy_scaler.partial_fit(energy.reshape((-1, 1)))
+            n_frames += n
 
         print("Computing statistic quantities ...")
         # Perform normalization if necessary
@@ -139,18 +145,30 @@ class Preprocessor:
             )
         )
 
-        random.shuffle(out)
         out = [r for r in out if r is not None]
+        train_ids, val_ids = self.config["path"].get("train_ids"), self.config["path"].get("val_ids")
+        if train_ids and val_ids:
+            # fixed split decided during data selection (no speaker/clip overlap checks needed here)
+            keep_train = set(open(train_ids).read().split())
+            keep_val = set(open(val_ids).read().split())
+            train = [m for m in out if m.split("|")[0] in keep_train]
+            val = [m for m in out if m.split("|")[0] in keep_val]
+        else:
+            random.shuffle(out)
+            train, val = out[self.val_size :], out[: self.val_size]
 
         # Write metadata
         with open(os.path.join(self.out_dir, "train.txt"), "w", encoding="utf-8") as f:
-            for m in out[self.val_size :]:
+            for m in train:
                 f.write(m + "\n")
         with open(os.path.join(self.out_dir, "val.txt"), "w", encoding="utf-8") as f:
-            for m in out[: self.val_size]:
+            for m in val:
                 f.write(m + "\n")
 
         return out
+
+    def _process_job(self, job):
+        return self.process_utterance(*job)
 
     def process_utterance(self, speaker, basename):
         wav_path = os.path.join(self.in_dir, speaker, "{}.wav".format(basename))
@@ -160,7 +178,9 @@ class Preprocessor:
         )
 
         # Get alignments
-        textgrid = tgt.io.read_textgrid(tg_path)
+        # MFA 2+ leaves silences as empty intervals, which tgt skips by default -> keep them,
+        # otherwise the silence frames vanish from the durations and phones drift out of sync with the mel
+        textgrid = tgt.io.read_textgrid(tg_path, include_empty_intervals=True)
         phone, duration, start, end = self.get_alignment(
             textgrid.get_tier_by_name("phones")
         )
@@ -169,7 +189,7 @@ class Preprocessor:
             return None
 
         # Read and trim wav files
-        wav, _ = librosa.load(wav_path)
+        wav, _ = librosa.load(wav_path, sr=self.sampling_rate)
         wav = wav[
             int(self.sampling_rate * start) : int(self.sampling_rate * end)
         ].astype(np.float32)
@@ -251,7 +271,8 @@ class Preprocessor:
         )
 
     def get_alignment(self, tier):
-        sil_phones = ["sil", "sp", "spn"]
+        # MFA 2+ writes silence as an empty label; treat it like "sp"
+        sil_phones = ["sil", "sp", "spn", ""]
 
         phones = []
         durations = []
@@ -275,7 +296,7 @@ class Preprocessor:
                 end_idx = len(phones)
             else:
                 # For silent phones
-                phones.append(p)
+                phones.append(p if p else "sp")
 
             durations.append(
                 int(

@@ -1,5 +1,6 @@
 import argparse
 import os
+import time
 
 import torch
 import yaml
@@ -35,7 +36,9 @@ def main(args, configs):
         batch_size=batch_size * group_size,
         shuffle=True,
         collate_fn=dataset.collate_fn,
+        num_workers=4,
     )
+    start_time = time.time()
 
     # Prepare model
     model, optimizer = get_model(args, configs, device, train=True)
@@ -160,7 +163,20 @@ def main(args, configs):
                         ),
                     )
 
-                if step == total_step:
+                out_of_time = args.max_hours and time.time() - start_time > args.max_hours * 3600
+                if step == total_step or out_of_time:
+                    # always leave a checkpoint behind (e.g. before a Kaggle session limit)
+                    torch.save(
+                        {
+                            "model": model.module.state_dict(),
+                            "optimizer": optimizer._optimizer.state_dict(),
+                        },
+                        os.path.join(
+                            train_config["path"]["ckpt_path"],
+                            "{}.pth.tar".format(step),
+                        ),
+                    )
+                    print("Stopped at step", step)
                     quit()
                 step += 1
                 outer_bar.update(1)
@@ -172,6 +188,9 @@ def main(args, configs):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--restore_step", type=int, default=0)
+    parser.add_argument(
+        "--max_hours", type=float, default=0, help="stop and save after this many hours (0 = no limit)"
+    )
     parser.add_argument(
         "-p",
         "--preprocess_config",
