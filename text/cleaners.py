@@ -87,3 +87,19 @@ def english_cleaners(text):
     text = expand_abbreviations(text)
     text = collapse_whitespace(text)
     return text
+
+
+_DIGITS = "zero one two three four five six seven eight nine".split()
+_SYMBOLS = [("%", " percent "), ("&", " and "), ("+", " plus "), ("@", " at "), ("_", " "), ("\r", " "), ("\n", " ")]
+
+
+def svarah_cleaners(text):
+    """Rules used to turn Svarah transcripts into what was spoken (also applied at synthesis)."""
+    for a, b in _SYMBOLS:
+        text = text.replace(a, b)
+    text = re.sub(r"\b[A-Z]{2,4}\b", lambda m: " ".join(m.group()), text)  # SBI -> S B I
+    text = re.sub(r"(\d+):(\d\d)\b", r"\1 \2", text)  # 10:45 -> 10 45 (read "ten forty five")
+    text = re.sub(r"(\d+)\s*-\s*(\d+)", r"\1 to \2", text)  # 15-17 -> 15 to 17
+    text = re.sub(r"\d{6,}", lambda m: " ".join(_DIGITS[int(c)] for c in m.group()), text)  # phone numbers
+    text = re.sub(r"(?<=\d),(?=\d{3})", "", text)  # 1,000 -> 1000
+    return english_cleaners(text)

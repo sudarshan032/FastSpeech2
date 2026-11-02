@@ -30,6 +30,10 @@ def read_lexicon(lex_path):
 
 
 def preprocess_english(text, preprocess_config):
+    if preprocess_config["dataset"] == "Svarah":
+        from text.cleaners import svarah_cleaners
+
+        text = svarah_cleaners(text)
     text = text.rstrip(punctuation)
     lexicon = read_lexicon(preprocess_config["path"]["lexicon_path"])
 
@@ -82,6 +86,27 @@ def preprocess_mandarin(text, preprocess_config):
     )
 
     return np.array(sequence)
+
+
+def preprocess_telugu(text, preprocess_config):
+    from text import telugu
+
+    phones = []
+    # punctuation inside the sentence becomes a short pause, like the English front-end
+    for chunk in re.split(r"[,;:.!?]+", telugu.normalize(text)):
+        ws = telugu.words(chunk)
+        if not ws:
+            continue
+        if phones:
+            phones.append("sp")
+        for w in ws:
+            phones += telugu.word_to_phones(w)
+    phones = "{" + " ".join(phones) + "}"
+    print("Raw Text Sequence: {}".format(text))
+    print("Phoneme Sequence: {}".format(phones))
+    return np.array(
+        text_to_sequence(phones, preprocess_config["preprocessing"]["text"]["text_cleaners"])
+    )
 
 
 def synthesize(model, step, configs, vocoder, batchs, control_values):
@@ -206,6 +231,8 @@ if __name__ == "__main__":
             texts = np.array([preprocess_english(args.text, preprocess_config)])
         elif preprocess_config["preprocessing"]["text"]["language"] == "zh":
             texts = np.array([preprocess_mandarin(args.text, preprocess_config)])
+        elif preprocess_config["preprocessing"]["text"]["language"] == "te":
+            texts = np.array([preprocess_telugu(args.text, preprocess_config)])
         text_lens = np.array([len(texts[0])])
         batchs = [(ids, raw_texts, speakers, texts, text_lens, max(text_lens))]
 
