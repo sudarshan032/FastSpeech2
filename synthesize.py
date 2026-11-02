@@ -40,8 +40,18 @@ def preprocess_english(text, preprocess_config):
     g2p = G2p()
     phones = []
     words = re.split(r"([,;.\-\?\!\s+])", text)
+    # homographs (e.g. "conduct" noun vs verb): pick the pronunciation by part of speech,
+    # as g2p_en does, instead of the single lexicon entry
+    from nltk import pos_tag
+
+    tokens = [w for w in words if re.fullmatch(r"[A-Za-z']+", w)]
+    pos = iter(pos_tag(tokens))
     for w in words:
-        if w.lower() in lexicon:
+        tag = next(pos)[1] if re.fullmatch(r"[A-Za-z']+", w) else None
+        if tag and w.lower() in g2p.homograph2features:
+            pron1, pron2, pos1 = g2p.homograph2features[w.lower()]
+            phones += pron1 if tag.startswith(pos1) else pron2
+        elif w.lower() in lexicon:
             phones += lexicon[w.lower()]
         else:
             phones += list(filter(lambda p: p != " ", g2p(w)))
